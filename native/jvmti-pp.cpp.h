@@ -1,0 +1,1 @@
+jvmtiEnv* jvmti = NULL;

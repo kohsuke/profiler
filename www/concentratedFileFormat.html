@@ -1,0 +1,202 @@
+<html>
+	<head>
+		<title>The format of the condensed file</title>
+	</head>
+	<body>
+		<p>
+			This document describes the format of the condensed profiler output file by using <a href="http://java.sun.com/docs/books/vmspec/2nd-edition/html/ClassFile.doc.html">the notation used in the JVM spec</a>.
+		<p>
+			A condensed file is a binary file. Multi-byte values (such as short, int, and long) are stored in the big-endian order, where the high bytes come first, so that they can be easily read by using <code>java.io.DataInput</code>.
+		<p>
+			The datatypes used here are the same as the abovementioned notation.
+		<p>
+			Tables, consisting of zero or more variable-sized items, are used in several places. Although we use C-like array syntax to refer to table items, the fact that tables are streams of varying-sized structures means that it is not possible to translate a table index directly to a byte offset into the table.
+		
+<pre>
+struct CondensedFile {
+    u4			magic;
+    u4			classTableStartAddress;
+    u4			methodTableStartAddress;
+    u4			callTreeStartAddress;
+    constant_pool	constantPool;	// variable length
+    class_info		classes[];	// variable length
+    method_info		methods[];	// variable length
+    call		callTree[];	// variable length. until the end of the file
+}
+</pre>
+The fields in this structure are as follows:
+	<dl>
+		<dt>magic
+		<dd>
+			The magic number '0xDEADBEEF'
+		
+		<dt>classTableStartAddress
+		<dd>
+			The byte address in this file where the 'classes' field starts.
+		
+		<dt>methodTableStartAddress
+		<dd>
+			The byte address in this file where the 'methods' field starts.
+		</body>
+		
+		<dt>callTreeStartAddress
+		<dd>
+			The byte address in this file where the 'callTree' field starts.
+		
+		<dt>constantPool
+		<dd>
+			Stores all the string constants used by the other parts of the file.
+		
+		<dt>classes
+		<dd>
+			Each array in this field stores information about one class. <tt>class_info</tt>s are often referenced by their indices in this array, called <tt>class_index</tt>.
+			
+			The size of this array is <tt>(methodTableStartAddress-classTableStartAddress)/sizeof(class_info)</tt>
+		
+		<dt>methods
+		<dd>
+			Each array in this field stores information about one method. <tt>method_info</tt>s are often referenced by their indices in this array, called <tt>method_index</tt>.
+			
+			The size of this array is <tt>(methodTableStartAddress-classTableStartAddress)/sizeof(class_info)</tt>
+		
+		<dt>callTree
+		<dd>
+			Each array in this field stores information about a method call. <tt>call</tt>s are often referenced by their indices in this array, called <tt>call_index</tt>.
+			
+			The size of this array is <tt>([file size]-callTreeStartAddress)/sizeof(call)</tt>
+	</dl>
+	
+	
+	<h3>Constant Pool</h3>
+	<p>
+		A constant pool stores strings used in the file. It is structured in the following way:
+<pre>
+struct constant_pool {
+    utf8	string[];
+}
+
+// a variable-length string encoded in the modified UTF-8
+struct utf8 {
+    u2		length;
+    u1		bytes[length];
+}
+</pre>
+	<p>
+		For the details about the modified UTF-8 encoding, see <a href="http://java.sun.com/docs/books/vmspec/2nd-edition/html/ClassFile.doc.html#7963">section 4.4.7 of the Java Virtual Machine Specification</a>. This can be easily read by the <tt>DataInput.readUTF8()</tt> method.
+		<p>
+		A String in this pool is referenced by using the address of its <tt>utf8</tt> structure in the file (the offset from the beginning of the file, not from the beginning of <tt>constant_pool</tt>). We use <tt>string_index</tt> to represent such references to strings.
+		<p>
+		For example, if a <tt>string_index</tt> has a value 0x00001324, then you can seek to 0x1324-th byte from the beginning of the file, and that points to a <tt>utf8</tt> structure to read the string from.
+		<p>
+		Note that this is different from the constant pool in the class file format, where constants are referenced by continuous index numbers.	
+	
+	
+	
+	
+	<h3>Class Info</h3>
+	<p>
+		Every class that appears in a profiler trace is represented by the <tt>class_info</tt> structure, which consists of the following fields:
+	</p>
+<pre>
+struct class_info {
+    string_index	className;
+    method_index	firstMethod;
+}
+</pre>
+	<dl>
+		<dt>className
+		<dd>
+			The fully-qualified name of the class, such as "java.lang.String"
+		
+		<dt>firstMethod
+		<dd>
+			All the methods of this class form a linked list. This field points to the first method of this class, or -1 if the class doesn't have any method.
+	</dl>
+	
+	
+	
+	
+	<h3>Method Info</h3>
+	<p>
+		Every method that appears in a profiler trace is represented by the <tt>method_info</tt> structure, which consists of the following fields:
+<pre>
+struct method_info {
+    class_index		class;
+    string_index	methodName;
+    string_index	signature;
+    method_index	nextMethodByClass;
+    call_index		firstCall;
+}
+</pre>
+	<dl>
+		<dt>class
+		<dd>
+			The class which this method belongs to.
+		
+		<dt>methodName
+		<dd>
+			The name of the method, such as "toString"
+		
+		<dt>signature
+		<dd>
+			The parameter types and the return type of this method encoded in <a href="http://java.sun.com/docs/books/vmspec/2nd-edition/html/ClassFile.doc.html#7035">the "method descriptor" format of the JVM spec.</a> For example, "(IDLjava/lang/Thread;)V"
+		
+		<dt>nextMethodByClass
+		<dd>
+			All the methods of a class form a linked list. This field points to the next method in this list, or -1 if this is the last method of the class. Also see <tt>class_info.firstMethod</tt>.
+		
+		<dt>firstCall
+		<dd>
+			All <tt>call</tt>s that call the same method form a linked list. This field points to the first call that calls this method, or -1 if this method has never been called.
+		
+	</dl>
+	
+	
+	
+	
+	<h3>Call</h3>
+	<p>
+		A <tt>call</tt> structure represents information about a method being called from another method. A <tt>call</tt> structure is "condensed", because if method X calls method Y twice it will only produce one <tt>call</tt> structure, not two.
+<pre>
+struct call {
+    u4			callCount;
+    u8			timeSpent;
+    method_index	methodCalled;
+    call_index		nextCallByMethod;
+    call_index		parent;
+    call_index		firstChild;
+    call_index		nextSibling;
+}
+</pre>
+	<dl>
+		<dt>callCount
+		<dd>
+			The number of times this method is called from its parent method.
+		
+		<dt>timeSpent
+		<dd>
+			Nano-seconds (measured by the wall-clock time) spent in this method and its descendants during the <tt>callCount</tt> invocations of this method from its parent.
+		
+		<dt>methodCalled
+		<dd>
+			The method that was called.
+		
+		<dt>nextCallByMethod
+		<dd>
+			All the <tt>call</tt>s that share the same <tt>methodCalled</tt> field is linked in a list, and this field points to the next <tt>call</tt> in this list, or -1 if this is the last <tt>call</tt>. Also see <tt>method_info.firstCall</tt>.
+		
+		<dt>parent
+		<dd>
+			The parent <tt>call</tt> that called this <tt>call</tt>, or -1 if this is the "root" call where there's no parent method call.
+		
+		<dt>firstChild
+		<dd>
+			In general a method call causes other method calls in turn. Such child <tt>calls</tt> form a linked list in this file, and this field points to the first such child <tt>call</tt>. The <tt>parent</tt>, <tt>firstChild</tt>, and <tt>nextSibling</tt> form a call tree structure.
+		
+		<dt>nextSibling
+		<dd>
+			This field points to the next <tt>call</tt> that shares the same parent <tt>call</tt>, or -1 if this is the last <tt>call</tt>.
+	</dl>
+		
+	</body>
+</html>
